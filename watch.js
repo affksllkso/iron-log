@@ -12,6 +12,8 @@ const exportWorkoutTypes = new Map(Object.entries({
 }));
 const watchLinkPrefix = '#watch=';
 const watchLinkKey = 'ironlog-watch-link';
+const healthySyncKey = 'ironlog-healthy-sync';
+let healthySyncRunning = false;
 
 function workoutTimestamp(value) {
   if (typeof value !== 'string' ||
@@ -129,6 +131,17 @@ function importWatchWorkouts(raw, allowExport = false) {
     return;
   }
 
+  const result = mergeWatchWorkouts(workouts);
+  if (!result) return;
+  if (!result.changed) {
+    toast('取り込み済みのワークアウトです。');
+    return;
+  }
+  render();
+  toast(result.added ? `ワークアウトを ${result.added} 件取り込みました。` : 'ワークアウトを更新しました。');
+}
+
+function mergeWatchWorkouts(workouts) {
   const previous = db;
   const merged = new Map(watchWorkouts().map(workout => [workoutKey(workout), workout]));
   const before = merged.size;
@@ -146,18 +159,14 @@ function importWatchWorkouts(raw, allowExport = false) {
       changed = true;
     }
   }
-  if (!changed) {
-    toast('取り込み済みのワークアウトです。');
-    return;
-  }
+  if (!changed) return {changed: false, added: 0};
 
   db = {...db, watchWorkouts: [...merged.values()]};
   if (!save()) {
     db = previous;
-    return;
+    return null;
   }
-  render();
-  toast(merged.size > before ? `ワークアウトを ${merged.size - before} 件取り込みました。` : 'ワークアウトを更新しました。');
+  return {changed: true, added: merged.size - before};
 }
 
 function deleteWatchWorkout(key) {
@@ -208,8 +217,108 @@ function receiveWatchLink() {
   }
 }
 
+function healthySyncConfig() {
+  try {
+    return JSON.parse(localStorage.getItem(healthySyncKey));
+  } catch {
+    return null;
+  }
+}
+
+async function readHealthyWorkouts(config) {
+  const url = new URL('/api/iron-log/workouts', config.origin);
+  url.searchParams.set('after', config.cursor);
+  const response = await fetch(url, {
+    headers: {Authorization: `Bearer ${config.token}`}, cache: 'no-store', redirect: 'error',
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!response.ok) throw new Error('Sync request failed');
+  const page = await response.json();
+  if (!Array.isArray(page.workouts) || typeof page.more !== 'boolean' || !Number.isSafeInteger(page.cursor) ||
+      page.cursor < config.cursor || (page.more && page.cursor <= config.cursor)) throw new Error('Invalid sync response');
+  return {...page, workouts: page.workouts.map(normalizeWorkout)};
+}
+
+async function startHealthySync(event) {
+  event.preventDefault();
+  if (healthySyncRunning) return;
+  healthySyncRunning = true;
+  const submit = event.submitter;
+  if (submit) submit.disabled = true;
+  try {
+    const url = new URL($('healthy-sync-url').value.trim());
+    const token = $('healthy-sync-token').value.trim();
+    if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash ||
+        !/^[a-zA-Z0-9_-]{32,128}$/.test(token)) throw new Error('Invalid sync settings');
+    const config = {origin: url.origin, token, cursor: 0};
+    await readHealthyWorkouts(config);
+    localStorage.setItem(healthySyncKey, JSON.stringify(config));
+    render();
+  } catch {
+    toast('接続できませんでした。同期APIのURLと閲覧用トークンを確認してください。');
+    return;
+  } finally {
+    healthySyncRunning = false;
+    if (submit) submit.disabled = false;
+  }
+  syncHealthyWorkouts(true);
+}
+
+function stopHealthySync() {
+  localStorage.removeItem(healthySyncKey);
+  render();
+  toast('HealthySyncの自動取り込みを停止しました。');
+}
+
+async function syncHealthyWorkouts(manual = false) {
+  if (healthySyncRunning || !healthySyncConfig()) return;
+  healthySyncRunning = true;
+  const run = async () => {
+    let config = healthySyncConfig();
+    if (!config) return;
+    let added = 0;
+    let changed = false;
+    let page;
+    do {
+      page = await readHealthyWorkouts(config);
+      const current = healthySyncConfig();
+      if (current?.origin !== config.origin || current.token !== config.token || current.cursor !== config.cursor) return;
+      const result = mergeWatchWorkouts(page.workouts);
+      if (!result) return;
+      added += result.added;
+      changed ||= result.changed;
+      config = {...config, cursor: page.cursor};
+      localStorage.setItem(healthySyncKey, JSON.stringify(config));
+      if (result.changed && (manual || tab === 'home' || tab === 'history')) render();
+    } while (page.more);
+    if (added) toast(`HealthySyncから ${added} 件取り込みました。`);
+    else if (manual) toast(changed ? 'ワークアウトを更新しました。' : '新しいワークアウトはありません。');
+  };
+  try {
+    if (navigator.locks) await navigator.locks.request(healthySyncKey, run);
+    else await run();
+  } catch {
+    if (manual) toast('同期できませんでした。通信状況と接続設定を確認してください。');
+  } finally {
+    healthySyncRunning = false;
+  }
+}
+
+function healthySyncSettings() {
+  return `<details><summary>HealthySyncで自動取り込み</summary>
+    ${healthySyncConfig() ? `<p class="muted">接続済み。IRON LOGを開いたときに新しいワークアウトを取り込みます。</p>
+      <button class="full secondary" onclick="syncHealthyWorkouts(true)">今すぐ同期</button>
+      <button class="full secondary" onclick="stopHealthySync()">接続を解除</button>` :
+    `<form onsubmit="startHealthySync(event)">
+      <label>同期APIのURL<input id="healthy-sync-url" type="url" required autocapitalize="none"></label>
+      <label>閲覧用トークン<input id="healthy-sync-token" type="password" required autocomplete="off"></label>
+      <button class="full secondary">接続する</button>
+    </form>`}</details>`;
+}
+
 function watchSettings() {
   return `<section><h3>Apple Watch ワークアウト</h3>
+    ${healthySyncSettings()}
     <button class="full" onclick="importWatchClipboard()">ショートカットから取り込む</button>
     <label>ワークアウトのJSONファイル<input type="file" accept=".json,application/json" onchange="readFile(this,raw=>importWatchWorkouts(raw,true));this.value=''"></label>
     <details><summary>Safariで自動取り込み</summary>
