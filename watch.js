@@ -4,14 +4,6 @@ const watchTypes = {
   traditionalStrengthTraining: '従来型筋力トレーニング',
   functionalStrengthTraining: '機能的筋力トレーニング'
 };
-const exportWorkoutTypes = new Map(Object.entries({
-  'traditional strength training': 'traditionalStrengthTraining',
-  'functional strength training': 'functionalStrengthTraining',
-  '従来型筋力トレーニング': 'traditionalStrengthTraining',
-  '機能的筋力トレーニング': 'functionalStrengthTraining'
-}));
-const watchLinkPrefix = '#watch=';
-const watchLinkKey = 'ironlog-watch-link';
 const healthySyncKey = 'ironlog-healthy-sync';
 let healthySyncRunning = false;
 
@@ -48,7 +40,6 @@ function normalizeWorkout(row) {
   return workout;
 }
 
-// Shortcuts date formatting can omit fractional seconds.
 function workoutKey(workout) {
   return [workout.type, workout.start.slice(0, 19), workout.end.slice(0, 19)].join('/');
 }
@@ -135,52 +126,6 @@ function workoutEntries(workouts, showDelete = false) {
     </div>`).join('');
 }
 
-function exportedStrengthWorkouts(data) {
-  const rows = data?.data?.workouts ?? data?.workouts;
-  if (!Array.isArray(rows)) throw new Error('Missing workouts');
-  const iso = value => value.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) ([+-]\d{2})(\d{2})$/, '$1T$2$3:$4');
-  return rows.flatMap(row => {
-    const type = exportWorkoutTypes.get(row?.name?.toLowerCase?.());
-    if (!type) return [];
-    const energy = row.activeEnergyBurned;
-    const heart = row.heartRate?.avg ?? row.avgHeartRate;
-    return [{
-      type,
-      start: iso(row.start),
-      end: iso(row.end),
-      minutes: typeof row.duration === 'number' && row.duration > 0 ? row.duration / 60 : undefined,
-      kcal: energy?.units === 'kcal' ? energy.qty : energy?.units === 'kJ' ? energy.qty / 4.184 : undefined,
-      bpm: ['count/min', 'bpm'].includes(heart?.units) ? heart.qty : undefined
-    }];
-  });
-}
-
-function importWatchWorkouts(raw, allowExport = false) {
-  let workouts;
-  try {
-    const data = JSON.parse(raw.replace(/^\uFEFF/, ''));
-    const rows = data?.format === 'iron-log-workouts-v1' ? data.workouts : allowExport ? exportedStrengthWorkouts(data) : null;
-    if (!Array.isArray(rows)) throw new Error('Unknown workout format');
-    workouts = rows.map(normalizeWorkout);
-  } catch {
-    toast('ワークアウトのJSON形式、日時、数値を確認してください。');
-    return;
-  }
-  if (!workouts.length) {
-    toast('筋力トレーニングのワークアウトが見つかりませんでした。');
-    return;
-  }
-
-  const result = mergeWatchWorkouts(workouts);
-  if (!result) return;
-  if (!result.changed) {
-    toast('取り込み済みのワークアウトです。');
-    return;
-  }
-  render();
-  toast(result.added ? `ワークアウトを ${result.added} 件取り込みました。` : 'ワークアウトを更新しました。');
-}
-
 function mergeWatchWorkouts(workouts) {
   const previous = db;
   const merged = new Map(watchWorkouts().map(workout => [workoutKey(workout), workout]));
@@ -189,7 +134,6 @@ function mergeWatchWorkouts(workouts) {
   for (const workout of workouts) {
     const key = workoutKey(workout);
     const existing = merged.get(key);
-    // Keep the local date and time used when this workout was first recorded.
     const updated = existing ? {...workout, ...existing} : workout;
     for (const field of ['minutes', 'kcal', 'bpm']) {
       if (workout[field] !== undefined) updated[field] = workout[field];
@@ -215,46 +159,6 @@ function deleteWatchWorkout(key) {
   db = {...db, watchWorkouts: watchWorkouts().filter(workout => workoutKey(workout) !== key)};
   if (save()) render();
   else db = previous;
-}
-
-async function importWatchClipboard() {
-  let raw;
-  try {
-    raw = await navigator.clipboard.readText();
-  } catch {
-    toast('クリップボードを読めませんでした。設定からファイルを選択できます。');
-    return;
-  }
-  importWatchWorkouts(raw);
-}
-
-function copyWatchLink() {
-  try {
-    let key = localStorage.getItem(watchLinkKey);
-    if (!key) {
-      key = crypto.randomUUID();
-      localStorage.setItem(watchLinkKey, key);
-    }
-    copyText(`${new URL('./index.html', location.href).href}${watchLinkPrefix}${key}.`);
-  } catch {
-    toast('Safari連携用のURLを作成できませんでした。');
-  }
-}
-
-function receiveWatchLink() {
-  if (!location.hash.startsWith(watchLinkPrefix)) return;
-  const fragment = location.hash.slice(watchLinkPrefix.length);
-  try {
-    window.history.replaceState(window.history.state, '', location.pathname + location.search);
-    const key = localStorage.getItem(watchLinkKey);
-    if (!key || !fragment.startsWith(`${key}.`)) {
-      toast('このブラウザの設定からSafari連携用のURLをコピーしてください。');
-      return;
-    }
-    importWatchWorkouts(decodeURIComponent(fragment.slice(key.length + 1)));
-  } catch {
-    toast('ワークアウトのURLを確認してください。');
-  }
 }
 
 function healthySyncConfig() {
@@ -344,27 +248,17 @@ async function syncHealthyWorkouts(manual = false) {
   }
 }
 
-function healthySyncSettings() {
-  return `<details><summary>HealthySyncで自動取り込み</summary>
-    ${healthySyncConfig() ? `<p class="muted">接続済み。IRON LOGを開いたときに新しいワークアウトを取り込みます。</p>
-      <button class="full secondary" onclick="syncHealthyWorkouts(true)">今すぐ同期</button>
+function watchSettings() {
+  return `<section><h3>Apple Watch ワークアウト（HealthySync）</h3>
+    ${healthySyncConfig() ? `<p class="muted">接続済み。IRON LOGを開いたときに新しいワークアウトを自動で取り込みます。</p>
+      <button class="full" onclick="syncHealthyWorkouts(true)">今すぐ同期</button>
       <button class="full secondary" onclick="stopHealthySync()">接続を解除</button>` :
-    `<form onsubmit="startHealthySync(event)">
+    `<p class="muted">HealthySync の同期APIと閲覧用トークンを設定すると、Apple Watch のワークアウトを自動で取り込みます。</p>
+    <form onsubmit="startHealthySync(event)">
       <label>同期APIのURL<input id="healthy-sync-url" type="url" required autocapitalize="none"></label>
       <label>閲覧用トークン<input id="healthy-sync-token" type="password" required autocomplete="off"></label>
-      <button class="full secondary">接続する</button>
-    </form>`}</details>`;
-}
-
-function watchSettings() {
-  return `<section><h3>Apple Watch ワークアウト</h3>
-    ${healthySyncSettings()}
-    <button class="full" onclick="importWatchClipboard()">ショートカットから取り込む</button>
-    <label>ワークアウトのJSONファイル<input type="file" accept=".json,application/json" onchange="readFile(this,raw=>importWatchWorkouts(raw,true));this.value=''"></label>
-    <details><summary>Safariで自動取り込み</summary>
-      <p class="muted">SafariでIRON LOGを使う場合は、連携用のURLをショートカットに登録してください。ホーム画面のWebアプリでは上の取り込みボタンを使用します。</p>
-      <button class="full secondary" onclick="copyWatchLink()">Safari連携用のURLをコピー</button>
-    </details>
+      <button class="full">接続する</button>
+    </form>`}
     ${workoutEntries(watchWorkouts(), true)}
   </section>`;
 }
