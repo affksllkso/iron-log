@@ -1,1 +1,18 @@
-const CACHE='iron-log-v1';self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(['./','./index.html','./manifest.json','./icon.png'])));self.skipWaiting()});self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));self.addEventListener('fetch',e=>{if(e.request.method!=='GET'||new URL(e.request.url).origin!==location.origin)return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)).then(r=>r||Response.error()))});
+const CACHE = 'iron-log-v2';
+const APP_FILES = ['./', './index.html', './manifest.json', './icon.png', './watch.js'];
+
+self.addEventListener('install', event => {
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(APP_FILES)).then(() => self.skipWaiting()));
+});
+
+self.addEventListener('activate', event => {
+  event.waitUntil(caches.delete('iron-log-v1').then(() => self.clients.claim()));
+});
+
+self.addEventListener('fetch', event => {
+  if (event.request.method !== 'GET' || new URL(event.request.url).origin !== location.origin) return;
+  event.respondWith(fetch(event.request).catch(async () => {
+    const cache = await caches.open(CACHE);
+    return (await cache.match(event.request)) || Response.error();
+  }));
+});
