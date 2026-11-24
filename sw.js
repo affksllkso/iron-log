@@ -1,4 +1,4 @@
-const CACHE = 'iron-log-v5';
+const CACHE = 'iron-log-v6';
 const APP_FILES = ['./', './index.html', './manifest.json', './icon.png', './watch.js?v=4'];
 
 self.addEventListener('install', event => {
@@ -6,7 +6,7 @@ self.addEventListener('install', event => {
 });
 
 self.addEventListener('activate', event => {
-  event.waitUntil(Promise.all(['iron-log-v1', 'iron-log-v2', 'iron-log-v3', 'iron-log-v4'].map(key => caches.delete(key))).then(() => self.clients.claim()));
+  event.waitUntil(Promise.all(['iron-log-v1', 'iron-log-v2', 'iron-log-v3', 'iron-log-v4', 'iron-log-v5'].map(key => caches.delete(key))).then(() => self.clients.claim()));
 });
 
 self.addEventListener('fetch', event => {
