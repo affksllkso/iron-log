@@ -78,13 +78,53 @@ function watchWorkouts(day) {
     .sort((a, b) => b.start.localeCompare(a.start));
 }
 
+function workoutDuration(workout) {
+  return workout.minutes ?? (Date.parse(workout.end) - Date.parse(workout.start)) / 60000;
+}
+
 function workoutSummary(workout) {
-  const duration = workout.minutes ?? (Date.parse(workout.end) - Date.parse(workout.start)) / 60000;
   return [
-    `${fmt(duration)} 分${workout.minutes === undefined ? '（開始から終了まで）' : ''}`,
+    `${fmt(workoutDuration(workout))} 分${workout.minutes === undefined ? '（開始から終了まで）' : ''}`,
     ...(workout.kcal === undefined ? [] : [`${fmt(workout.kcal)} kcal`]),
     ...(workout.bpm === undefined ? [] : [`平均 ${fmt(workout.bpm)} bpm`])
   ].join(' / ');
+}
+
+const workoutRingMetrics = [
+  {className: 'duration', label: '運動時間', unit: '分', value: workoutDuration},
+  {className: 'energy', label: '消費カロリー', unit: 'kcal', value: workout => workout.kcal},
+  {className: 'heart', label: '平均心拍', unit: 'bpm', value: workout => workout.bpm}
+];
+
+function workoutRingCards(workouts) {
+  if (!workouts.length) return '';
+  const history = db.watchWorkouts ?? [];
+  const metrics = workoutRingMetrics.map(metric => ({
+    ...metric,
+    max: history.reduce((max, workout) => Math.max(max, metric.value(workout) ?? 0), 0)
+  }));
+
+  return workouts.map(workout => `
+    <article class="workout-card">
+      <header class="workout-card-heading">
+        <h4>${watchTypes[workout.type]}</h4>
+        <time datetime="${esc(workout.start)}">${esc(workout.date)} ${esc(workout.time)}</time>
+      </header>
+      <dl class="workout-rings">
+        ${metrics.map(metric => {
+          const value = metric.value(workout);
+          const label = metric.className === 'duration' && workout.minutes === undefined ? '経過時間' : metric.label;
+          const fill = value == null || metric.max === 0 ? 0 : Math.min(100, 100 * value / metric.max);
+          return `<div class="workout-metric workout-metric-${metric.className}">
+            <dt>${label}</dt>
+            <dd class="workout-ring" style="--ring-fill:${fill}%">
+              ${value == null ? '<span class="workout-ring-missing">記録なし</span>' :
+                `<strong>${fmt(value)}</strong><small>${metric.unit}</small>`}
+            </dd>
+          </div>`;
+        }).join('')}
+      </dl>
+    </article>`).join('') + '<p class="workout-ring-scale">リング一周は、項目ごとの記録内最大値です。</p>';
 }
 
 function workoutEntries(workouts, showDelete = false) {
