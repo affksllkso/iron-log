@@ -85,6 +85,7 @@ function ensureDb(target) {
     if (!(typeof e.repMax === 'number' && e.repMax >= e.repMin)) e.repMax = Math.max(e.repMin, def.repMax);
     if (!(typeof e.step === 'number' && e.step > 0)) e.step = def.step;
   }
+  if (typeof ensureProgressDb === 'function') ensureProgressDb(target);
   return target;
 }
 
@@ -115,6 +116,7 @@ function validExtendedBackup(d) {
       }
     }
   }
+  if (typeof validProgressBackup === 'function' && !validProgressBackup(d)) return false;
   return true;
 }
 
@@ -373,11 +375,26 @@ function completePlanRow(blockId, rowId) {
   const tagVal = row.tag || 'work';
   const prior = [...db.sets];
   const pr = tagVal !== 'warmup' ? evaluatePR(prior, block.e, w, reps, mode, plan.date, 1) : null;
-  const newSet = {id: uid(), date: plan.date, e: block.e, w, reps, mode, note: '', rest, tag: tagVal};
+  const newSet = {
+    id: uid(),
+    date: plan.date,
+    e: block.e,
+    w,
+    reps,
+    mode,
+    note: '',
+    rest,
+    tag: tagVal,
+    sessionId: plan.id,
+    sessionName: plan.templateName,
+    ...(plan.templateId ? {templateId: plan.templateId} : {}),
+    ...(plan.date === today() ? {at: new Date().toISOString()} : {})
+  };
   if (rirVal !== undefined && Number.isFinite(rirVal)) newSet.rir = rirVal;
   db.sets.push(newSet);
   row.done = true;
   row.setId = newSet.id;
+  if (typeof syncUnlockedAchievements === 'function') syncUnlockedAchievements(db, true);
   // 次セットへ入力値を引き継ぎ
   const nextRow = block.rows.slice(idx + 1).find(r => !r.done);
   if (nextRow) {
@@ -401,6 +418,7 @@ function undoPlanRow(blockId, rowId) {
   if (row.setId) db.sets = db.sets.filter(s => s.id !== row.setId);
   row.done = false;
   row.setId = null;
+  if (typeof syncUnlockedAchievements === 'function') syncUnlockedAchievements(db, false);
   save();
   render();
   toast('完了を取り消しました');
@@ -479,10 +497,13 @@ function finishActivePlan(updateTemplate) {
       if (updatedItems.length) tpl.items = updatedItems;
     }
   }
+  const finishedKey = `${plan.date}::${plan.id}`;
+  const hadDone = plan.blocks.some(b => b.rows.some(r => r.done));
   db.activePlan = null;
   planFinishPrompt = false;
   save();
-  render();
+  if (hadDone && typeof openWorkoutComplete === 'function') openWorkoutComplete(finishedKey);
+  else render();
   toast(updateTemplate ? '実績をテンプレートへ反映して終了しました' : 'メニューを終了しました（未実施セットは除外）');
 }
 
@@ -871,6 +892,7 @@ function renderCoachBox(exId) {
     ${adv.status === 'ready' ? `
       <div class="coach-main">${esc(adv.headline)}</div>
       <p class="coach-reason">${esc(adv.reason)}</p>
+      ${typeof getRestHintForExercise === 'function' && getRestHintForExercise(exId) ? `<small class="coach-prog">${esc(getRestHintForExercise(exId))}</small>` : ''}
       ${adv.progressNote ? `<small class="coach-prog">${esc(adv.progressNote)}</small>` : ''}
       <div class="btn-group" style="margin-top:8px">
         <button type="button" class="sm-btn" onclick="applyCoachAdvice('${esc(exId)}')">採用（入力欄へ反映）</button>
